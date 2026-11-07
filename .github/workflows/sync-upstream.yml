@@ -35,7 +35,7 @@ jobs:
           git config user.name "taiwan-fin-hub-updater"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          branch="upstream-sync/$(date -u +%Y%m%d)-${GITHUB_RUN_ID}"
+          branch="upstream-sync/$(date -u +%Y%m%d)-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           before="$(git rev-parse HEAD)"
 
           # 只執行 repo 內已審查過的 updater，不在執行期間從上游下載 script。
