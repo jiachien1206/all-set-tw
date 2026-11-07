@@ -1,4 +1,4 @@
-name: Sync Latest Version (Review Branch)
+name: Sync Latest Version (PR)
 
 on:
   schedule:
@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 concurrency:
   group: sync-upstream
@@ -47,10 +48,11 @@ jobs:
             echo "branch=$branch" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Summarize review branch
+      - name: Open pull request for review
         if: steps.sync.outputs.changed == 'true'
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           BRANCH: ${{ steps.sync.outputs.branch }}
         run: |
           set -euo pipefail
@@ -64,13 +66,19 @@ jobs:
             changes="https://github.com/TedLin1993/all-set-tw/commits/${upstream}"
           fi
 
-          # 不由 Actions 開 PR；由使用者從 compare 頁面自行建立並審查。
-          {
-            echo "## 上游同步待審查"
-            echo ""
-            echo "- 開 PR：${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/main...${BRANCH}?expand=1"
-            echo "- 上游版本：https://github.com/TedLin1993/all-set-tw/commit/${upstream}"
-            echo "- 上游變更：${changes}"
-            echo ""
-            echo "審查完成後請用 **Create a merge commit** 或 **Rebase and merge** 合併，保留 \`Taiwan-Fin-Hub-Upstream\` 紀錄。"
-          } >> "$GITHUB_STEP_SUMMARY"
+          body="$(printf '%s\n' \
+            "上游版本：https://github.com/TedLin1993/all-set-tw/commit/${upstream}" \
+            "上游變更：${changes}" \
+            "" \
+            "審查完成後請用 **Create a merge commit** 或 **Rebase and merge** 合併，保留 commit message 中的 \`Taiwan-Fin-Hub-Upstream\` 紀錄；合併至 main 後 Workers Builds 會自動部署。")"
+
+          gh pr create --base main --head "$BRANCH" \
+            --title "$(git log -1 --format=%s)" \
+            --body "$body"
+
+          # 關閉尚未合併的舊同步 PR，只保留最新一筆。
+          gh pr list --state open --base main --json number,headRefName \
+            --jq ".[] | select(.headRefName | startswith(\"upstream-sync/\")) | select(.headRefName != \"$BRANCH\") | .number" |
+            while read -r number; do
+              gh pr close "$number" --delete-branch --comment "已由較新的同步 PR 取代。"
+            done
