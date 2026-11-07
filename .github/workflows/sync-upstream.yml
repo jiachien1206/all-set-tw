@@ -72,9 +72,10 @@ jobs:
             "" \
             "審查完成後請用 **Create a merge commit** 或 **Rebase and merge** 合併，保留 commit message 中的 \`Taiwan-Fin-Hub-Upstream\` 紀錄；合併至 main 後 Workers Builds 會自動部署。")"
 
-          gh pr create --base main --head "$BRANCH" \
-            --title "$(git log -1 --format=%s)" \
-            --body "$body"
+          gh api "repos/${GITHUB_REPOSITORY}/pulls" \
+            -f base=main -f head="$BRANCH" \
+            -f title="$(git log -1 --format=%s)" \
+            -f body="$body" --jq .html_url
 
           # 關閉尚未合併的舊同步 PR，只保留最新一筆。
           gh pr list --state open --base main --json number,headRefName \
