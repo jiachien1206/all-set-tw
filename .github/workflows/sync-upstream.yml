@@ -1,0 +1,84 @@
+name: Sync Latest Version (PR)
+
+on:
+  schedule:
+    # GitHub Actions 使用 UTC；台灣時間每週一 04:15 執行。
+    - cron: "15 20 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository != 'TedLin1993/taiwan-fin-hub' && github.repository != 'TedLin1993/all-set-tw'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout deployed repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Sync upstream into review branch
+        id: sync
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "taiwan-fin-hub-updater"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          branch="upstream-sync/$(date -u +%Y%m%d)-${GITHUB_RUN_ID}"
+          before="$(git rev-parse HEAD)"
+
+          # 只執行 repo 內已審查過的 updater，不在執行期間從上游下載 script。
+          SYNC_TARGET_BRANCH="$branch" node scripts/sync-upstream.mjs
+
+          if [ "$(git rev-parse HEAD)" = "$before" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open pull request for review
+        if: steps.sync.outputs.changed == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.sync.outputs.branch }}
+        run: |
+          set -euo pipefail
+
+          upstream="$(git log -1 --format=%B | sed -n 's/^Taiwan-Fin-Hub-Upstream: //p' | tail -n 1)"
+          previous="$(git log origin/main --format=%B --grep 'Taiwan-Fin-Hub-Upstream:' -1 | sed -n 's/^Taiwan-Fin-Hub-Upstream: //p' | tail -n 1)"
+
+          if [ -n "$previous" ]; then
+            changes="https://github.com/TedLin1993/all-set-tw/compare/${previous}...${upstream}"
+          else
+            changes="https://github.com/TedLin1993/all-set-tw/commits/${upstream}"
+          fi
+
+          body="$(printf '%s\n' \
+            "上游版本：https://github.com/TedLin1993/all-set-tw/commit/${upstream}" \
+            "上游變更：${changes}" \
+            "" \
+            "審查完成後請用 **Create a merge commit** 或 **Rebase and merge** 合併，保留 commit message 中的 \`Taiwan-Fin-Hub-Upstream\` 紀錄；合併至 main 後 Workers Builds 會自動部署。")"
+
+          gh pr create --base main --head "$BRANCH" \
+            --title "$(git log -1 --format=%s)" \
+            --body "$body"
+
+          # 關閉尚未合併的舊同步 PR，只保留最新一筆。
+          gh pr list --state open --base main --json number,headRefName \
+            --jq ".[] | select(.headRefName | startswith(\"upstream-sync/\")) | select(.headRefName != \"$BRANCH\") | .number" |
+            while read -r number; do
+              gh pr close "$number" --delete-branch --comment "已由較新的同步 PR 取代。"
+            done
