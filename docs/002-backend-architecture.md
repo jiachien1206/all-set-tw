@@ -959,8 +959,9 @@ connector lock 保留到報告結果寫入及 run 成功結案；失敗的 run t
 - 最多處理 1 個到期工作，讓每個 connector 使用獨立的 Worker invocation 與 subrequest 額度。
 - 每個工作使用獨立 run ID。
 - 成功後更新下次執行時間。
-- 需要 OTP、CAPTCHA 或重新登入時記錄為 `needs_user_action`。
-- 其他錯誤記錄為 `failed`。
+- 需要 OTP、CAPTCHA 或重新登入時記錄為 `needs_user_action`，保留原本的下次執行時間；此狀態不會被挑選，所以時間可能停在過去。
+- 其他錯誤記錄為 `failed`，並更新下次執行時間。
+- 手動同步失敗（含中斷後由 recovery 結案）時，若下次執行時間已過，會推進到下一個排程時段；未過期的時間保留，不延後原排程。這樣工作離開 `needs_user_action` 時，殘留的過期時間不會讓下一次 tick 在非排程時段觸發整輪預設排程。
 - Log 使用結構化 JSON，包含 connector、scope、trigger、status 與 duration。
 
 ## 同步資料寫入
@@ -978,6 +979,13 @@ Connector 不得直接寫入金融資料表。
 5. 在同一批次執行必要的 lifecycle reconciliation、cursor 更新與 staging cleanup。
 
 這樣可避免部分資料已更新、cursor 卻未更新，或 cursor 已更新但資料尚未完整寫入。
+
+快照、交易、帳單與投資交易的 `id` 由寫入當下的帳戶與來源識別組成，conflict columns
+則包含 `account_id`。Lifecycle reconciliation（例如 `card-reconciliation.ts` 把單卡
+摘要帳戶併回實體卡）可以改寫既有列的 `account_id` 並保留 `id`，以免影響交易偏好、
+分類與發票等引用。Promotion 前會把 staging 中同 `id` 既有列的 payload 改用其目前的
+`account_id`，讓來源再次送出舊帳戶的資料時更新同一列，不會撞上 `id` 主鍵。
+改寫其他組成 `id` 的欄位（例如 `source_id`）不在此範圍，需另行處理重送衝突。
 
 永豐信用卡取得 `LatestTx.Items` 與 `OutstandingDetail.Detail` 後，在 `bank_transactions`
 原表保存授權，以 `matched_transaction_id` 記錄已入帳關係，不另設授權表或停用欄位。
